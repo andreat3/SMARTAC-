@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SMARTAC Bridge Maps -> ESP32</title>
+  <style>
+    body { font-family: system-ui, sans-serif; background: #0f172a; color: #f8fafc; text-align: center; padding: 25px; }
+    .card { background: #1e293b; border-radius: 16px; padding: 20px; max-width: 400px; margin: 15px auto; }
+    button { width: 100%; padding: 16px; font-size: 18px; font-weight: bold; border: none; border-radius: 10px; background: #0284c7; color: white; cursor: pointer; }
+    #stato { margin-top: 12px; font-size: 15px; color: #38bdf8; }
+    #ultimo-dato { margin-top: 20px; font-size: 18px; color: #4ade80; font-weight: bold; }
+  </style>
+</head>
+<body>
+
+  <div class="card">
+    <h2>SMARTAC Ponte Bluetooth</h2>
+    <button onclick="connettiBLE()">1. Connetti Tachimetro</button>
+    <div id="stato">Stato: Disconnesso</div>
+    <div id="ultimo-dato">In attesa dati da MacroDroid...</div>
+  </div>
+
+  <script>
+    const SERVICE_UUID = '6e400001-b5a3-f393-e0a9-e50e24dcca9e';
+    const RX_UUID      = '6e400002-b5a3-f393-e0a9-e50e24dcca9e';
+    let rxChar = null;
+    let ultimoTimestampLetto = "";
+
+    const parametri = new URLSearchParams(window.location.search);
+    const datiRicevuti = parametri.get('dati');
+
+    // SECONDA SCHEDA (Aperta da MacroDroid con ?dati=...)
+    if (datiRicevuti) {
+      const pacchetto = datiRicevuti + '###' + Date.now();
+      localStorage.setItem('smartac_maps_data', pacchetto);
+      document.getElementById('ultimo-dato').innerText = 'Inoltrato: ' + datiRicevuti;
+      setTimeout(() => { window.close(); }, 1000);
+    }
+
+    // PRIMA SCHEDA (Controlla ogni 500ms se ci sono nuovi dati da MacroDroid)
+    setInterval(async () => {
+      if (datiRicevuti) return;
+      const salvato = localStorage.getItem('smartac_maps_data');
+      if (salvato && salvato !== ultimoTimestampLetto) {
+        ultimoTimestampLetto = salvato;
+        const testoPulito = salvato.split('###')[0];
+        document.getElementById('ultimo-dato').innerText = 'Inviato a ESP32: ' + testoPulito;
+        await inviaESP32(testoPulito);
+      }
+    }, 500);
+
+    async function connettiBLE() {
+      const statoEl = document.getElementById('stato');
+      try {
+        const device = await navigator.bluetooth.requestDevice({
+          filters: [{ services: [SERVICE_UUID] }]
+        });
+        device.addEventListener('gattserverdisconnected', () => {
+          rxChar = null;
+          statoEl.innerText = 'Stato: Disconnesso';
+        });
+        const server = await device.gatt.connect();
+        const service = await server.getPrimaryService(SERVICE_UUID);
+        rxChar = await service.getCharacteristic(RX_UUID);
+        statoEl.innerText = 'Connesso a: ' + device.name;
+      } catch (e) {
+        statoEl.innerText = 'Errore: ' + e.message;
+      }
+    }
+
+    async function inviaESP32(stringa) {
+      if (!rxChar) return;
+      const data = new TextEncoder().encode(stringa + '\n');
+      try {
+        await rxChar.writeValueWithoutResponse(data);
+      } catch (e) {
+        await rxChar.writeValue(data);
+      }
+    }
+  </script>
+</body>
+</html>
